@@ -31,4 +31,4 @@ RUN pip install -e .
 EXPOSE 8000
 
 # Run the API server
-CMD uvicorn api:app --host 0.0.0.0 --port ${PORT:-8000}
+CMD ["python", "api.py"]
