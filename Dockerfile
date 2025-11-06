@@ -19,9 +19,10 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy the entire whisper package
 COPY whisper/ ./whisper/
 COPY api.py .
-COPY setup.py .
+COPY pyproject.toml .
 COPY README.md .
 COPY LICENSE .
+COPY MANIFEST.in .
 
 # Install whisper package in editable mode
 RUN pip install -e .
