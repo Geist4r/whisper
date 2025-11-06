@@ -1,8 +1,10 @@
 import argparse
 import os
+import tempfile
 import traceback
 import warnings
 from typing import TYPE_CHECKING, List, Optional, Tuple, Union
+from urllib.request import urlopen
 
 import numpy as np
 import torch
@@ -124,6 +126,16 @@ def transcribe(
     A dictionary containing the resulting text ("text") and segment-level details ("segments"), and
     the spoken language ("language"), which is detected when `decode_options["language"]` is None.
     """
+    # Handle URL download
+    temp_file = None
+    if isinstance(audio, str) and (audio.startswith('http://') or audio.startswith('https://')):
+        response = urlopen(audio)
+        suffix = os.path.splitext(audio)[1] if audio.lower().endswith(('.mp3', '.wav', '.m4a', '.flac', '.ogg')) else '.mp3'
+        temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
+        temp_file.write(response.read())
+        temp_file.close()
+        audio = temp_file.name
+    
     dtype = torch.float16 if decode_options.get("fp16", True) else torch.float32
     if model.device == torch.device("cpu"):
         if torch.cuda.is_available():
@@ -507,11 +519,17 @@ def transcribe(
             # update progress bar
             pbar.update(min(content_frames, seek) - previous_seek)
 
-    return dict(
+    result = dict(
         text=tokenizer.decode(all_tokens[len(initial_prompt_tokens) :]),
         segments=all_segments,
         language=language,
     )
+    
+    # Clean up temp file
+    if temp_file and os.path.exists(temp_file):
+        os.unlink(temp_file)
+    
+    return result
 
 
 def cli():
