@@ -10,10 +10,17 @@ import os
 import requests
 from typing import Optional, List, Dict, Any
 import logging
+import threading
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# Concurrent request limiter
+MAX_CONCURRENT_TRANSCRIPTIONS = int(os.getenv("MAX_CONCURRENT", "3"))
+transcription_semaphore = threading.Semaphore(MAX_CONCURRENT_TRANSCRIPTIONS)
+active_transcriptions = 0
+transcription_lock = threading.Lock()
 
 # Initialize FastAPI app
 app = FastAPI(
@@ -64,10 +71,15 @@ class AsyncTranscribeResponse(BaseModel):
 @app.get("/")
 async def root():
     """Health check endpoint"""
+    with transcription_lock:
+        active = active_transcriptions
+    
     return {
         "status": "ok",
         "message": "Whisper API is running",
         "model": MODEL_NAME,
+        "active_transcriptions": active,
+        "max_concurrent": MAX_CONCURRENT_TRANSCRIPTIONS,
         "endpoints": {
             "transcribe": "/transcribe (POST)",
             "health": "/health (GET)",
@@ -93,10 +105,27 @@ def send_webhook(webhook_url: str, data: dict):
 
 def process_transcription(audio_url: str, options: dict, webhook_url: Optional[str]):
     """Background task for transcription with webhook callback"""
+    global active_transcriptions
+    
+    # Wait for available slot
+    if not transcription_semaphore.acquire(blocking=False):
+        logger.warning(f"Too many concurrent transcriptions, rejecting: {audio_url}")
+        if webhook_url:
+            error_data = {"status": "error", "error": "Server busy, too many concurrent requests"}
+            send_webhook(webhook_url, error_data)
+        return
+    
     try:
-        logger.info(f"Background transcription started for: {audio_url}")
+        with transcription_lock:
+            active_transcriptions += 1
+        
+        logger.info(f"Background transcription started for: {audio_url} (Active: {active_transcriptions})")
         result = model.transcribe(audio_url, **options)
         logger.info(f"Background transcription completed. Language: {result['language']}")
+        
+        # Force garbage collection to free memory
+        import gc
+        gc.collect()
         
         if webhook_url:
             # Send result to webhook
@@ -116,6 +145,15 @@ def process_transcription(audio_url: str, options: dict, webhook_url: Optional[s
                 "error": str(e)
             }
             send_webhook(webhook_url, error_data)
+    finally:
+        with transcription_lock:
+            active_transcriptions -= 1
+        transcription_semaphore.release()
+        
+        # Force garbage collection after each transcription
+        import gc
+        gc.collect()
+        logger.info(f"Transcription slot freed (Active: {active_transcriptions})")
 
 
 @app.post("/transcribe", response_model=TranscribeResponse)
@@ -166,6 +204,10 @@ async def transcribe_audio(request: TranscribeRequest, background_tasks: Backgro
         result = model.transcribe(str(request.url), **options)
         logger.info(f"Transcription completed. Language: {result['language']}")
         
+        # Force garbage collection to free memory
+        import gc
+        gc.collect()
+        
         return TranscribeResponse(
             text=result["text"],
             language=result["language"],
@@ -178,6 +220,10 @@ async def transcribe_audio(request: TranscribeRequest, background_tasks: Backgro
             status_code=500,
             detail=f"Transcription failed: {str(e)}"
         )
+    finally:
+        # Always clean up memory
+        import gc
+        gc.collect()
 
 
 if __name__ == "__main__":
