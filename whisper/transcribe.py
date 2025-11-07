@@ -4,7 +4,7 @@ import tempfile
 import traceback
 import warnings
 from typing import TYPE_CHECKING, List, Optional, Tuple, Union
-from urllib.request import urlopen
+from urllib.request import urlopen, Request
 
 import numpy as np
 import torch
@@ -129,7 +129,15 @@ def transcribe(
     # Handle URL download
     temp_file = None
     if isinstance(audio, str) and (audio.startswith('http://') or audio.startswith('https://')):
-        response = urlopen(audio)
+        # Create request with headers to bypass some restrictions
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+            'Accept': '*/*',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Connection': 'keep-alive',
+        }
+        req = Request(audio, headers=headers)
+        response = urlopen(req, timeout=30)
         suffix = os.path.splitext(audio)[1] if audio.lower().endswith(('.mp3', '.wav', '.m4a', '.flac', '.ogg')) else '.mp3'
         temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
         temp_file.write(response.read())
